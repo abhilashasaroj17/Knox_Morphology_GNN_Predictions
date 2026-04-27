@@ -49,16 +49,21 @@ Visualizes GNN performance on the 8,121 TPO-labeled test set:
 
 ## Pipeline Steps
 
-1. **`step1_download_overture.py`** — Download road segments from Overture Maps
-2. **`step2_build_graphs.py`** — Build spatial graph with NetworkX
-3. **`step3_morphology_features.py`** — Extract urban morphology features
-4. **`step4_match_tpo_volumes.py`** — Match TPO traffic volumes to Overture segments
-5. **`step5_prepare_training_data.py`** — Convert to PyTorch Geometric format
-6. **`step6_road_criticality.py`** — Train GAT model with 5-fold CV
+1. **`step1_download_overture.py`** — Download road segments and buildings from Overture Maps
+2. **`step2_build_graphs.py`** — Build spatial graph with NetworkX, compute centrality metrics
+3. **`step3_morphology_features.py`** — Extract urban morphology features from building data
+   - Building density, coverage, sizes in 500m buffers
+   - Street network density and connectivity
+   - Land use diversity metrics
+4. **`step4_match_tpo_volumes.py`** — Match TPO traffic volumes to Overture segments via spatial join
+5. **`step5_prepare_training_data.py`** — Convert to PyTorch Geometric format with all node features
+6. **`step6_road_criticality.py`** — Train GAT model with 5-fold stratified CV
+   - Uses 15 node features: road attributes + graph metrics + morphology
+   - Binary classification: V/C > 0.75 threshold
 7. **`step7_interactive_maps.py`** — Generate initial prediction maps
-8. **`step8_summary_report.py`** — Generate performance report
-9. **`step9_comparison_map.py`** — TPO ground truth vs GNN extension map
-10. **`step9b_model_accuracy_map.py`** — Confusion matrix visualization
+8. **`step8_summary_report.py`** — Generate performance report with figures
+9. **`step9_comparison_map.py`** — TPO ground truth vs GNN extension map (6 layers)
+10. **`step9b_model_accuracy_map.py`** — Confusion matrix visualization (TP/FP/FN/TN)
 
 ---
 
@@ -66,9 +71,32 @@ Visualizes GNN performance on the 8,121 TPO-labeled test set:
 
 **Graph Attention Network (GAT)**
 - 2 layers, 8 attention heads per layer
-- Node features: road class, length, lanes, speed, degree, betweenness
+- Node features: 15 total features per road segment
 - Edge features: spatial distance, connectivity
 - Binary classification: critical (V/C > 0.75) vs non-critical
+
+**Node Features (15 total):**
+1. **Road Class** (categorical → one-hot encoded)
+   - `motorway`, `trunk`, `primary`, `secondary`, `tertiary`, `residential`, `service`
+2. **Length (m)** — Road segment length in meters
+3. **Lanes** — Number of travel lanes
+4. **Max Speed (km/h)** — Posted speed limit
+5. **Width (m)** — Road width (if available)
+6. **Is One-Way** — Binary indicator for one-way streets
+7. **Degree Centrality** — Number of connected road segments
+8. **Betweenness Centrality** — Measure of how often the segment lies on shortest paths
+9. **Closeness Centrality** — Average distance to all other segments
+10. **Building Density** — Buildings per km² in 500m buffer
+11. **Building Footprint Coverage** — % of area covered by buildings
+12. **Street Network Density** — Total km of roads per km² in buffer
+13. **Street Connectivity** — Average node degree in buffer
+14. **Mean Building Size** — Average building footprint area (m²)
+15. **Land Use Mix** — Diversity of building types (residential, commercial, industrial)
+
+**Graph Structure:**
+- Nodes: 65,524 road segments (Overture Maps)
+- Edges: Spatial connectivity where road segments touch
+- Spatial weighting: Edge weights based on Euclidean distance
 
 **Training Details:**
 - 5-fold stratified cross-validation
@@ -121,9 +149,24 @@ Output HTML maps will be in `outputs/maps/`.
 
 ## Data Sources
 
-- **Road Network:** [Overture Maps](https://overturemaps.org/) (transportation theme)
+- **Road Network:** [Overture Maps](https://overturemaps.org/) (transportation theme, 65,524 segments)
+  - Attributes: road class, lanes, speed limit, geometry
+  - Knox County, TN coverage (36.1° N, -84.0° W)
+  
 - **Traffic Volumes:** Knox TPO 2019 Assignment Model
-- **Study Area:** Knox County, TN (36.1° N, -84.0° W)
+  - Vehicle volumes on 8,121 major road segments
+  - V/C ratios from capacity analysis
+  - Used as ground truth labels for GNN training
+  
+- **Building Data:** [Overture Maps](https://overturemaps.org/) (buildings theme)
+  - Building footprints, heights, land use types
+  - Used to compute urban morphology features
+  - Aggregated in 500m buffers around each road segment
+  
+- **Urban Morphology Features:** Computed from buildings + roads
+  - Building density, coverage, sizes
+  - Street network density and connectivity
+  - Land use diversity metrics
 
 ---
 
