@@ -1,0 +1,26 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Data files (too large for Git)
+outputs/overture_cache/
+outputs/graphs/
+outputs/zones_clean.gpkg
+outputs/criticality/*.gpkg
+*.parquet
+
+# Logs
+*.log
+step2_log.txt
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

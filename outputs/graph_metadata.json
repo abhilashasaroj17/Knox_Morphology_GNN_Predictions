@@ -1,0 +1,18 @@
+{
+  "feat_cols": [
+    "TOTAL_EMP",
+    "HH",
+    "area_km2",
+    "building_coverage_pct",
+    "avg_seg_length_m",
+    "street_density_km_km2",
+    "building_density_n_km2",
+    "avg_footprint_m2"
+  ],
+  "target_cols": [
+    "production",
+    "attraction"
+  ],
+  "n_zones": 508,
+  "n_folds": 5
+}

@@ -1,0 +1,22 @@
+name: knox_city2graph
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - geopandas
+  - pandas
+  - numpy
+  - matplotlib
+  - openpyxl
+  - networkx
+  - osmnx
+  - shapely
+  - pyproj
+  - fiona
+  - scipy
+  - ipykernel
+  - jupyter
+  - pip
+  - pip:
+    - city2graph

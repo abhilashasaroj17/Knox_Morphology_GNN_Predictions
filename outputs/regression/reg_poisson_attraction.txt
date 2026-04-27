@@ -1,0 +1,24 @@
+                 Generalized Linear Model Regression Results                  
+==============================================================================
+Dep. Variable:             attraction   No. Observations:                  508
+Model:                            GLM   Df Residuals:                      499
+Model Family:                 Poisson   Df Model:                            8
+Link Function:                    Log   Scale:                          1.0000
+Method:                          IRLS   Log-Likelihood:            -1.6962e+05
+Date:                Fri, 24 Apr 2026   Deviance:                   3.3458e+05
+Time:                        14:29:50   Pearson chi2:                 3.56e+05
+No. Iterations:                     6   Pseudo R-squ. (CS):              1.000
+Covariance Type:            nonrobust                                         
+==========================================================================================
+                             coef    std err          z      P>|z|      [0.025      0.975]
+------------------------------------------------------------------------------------------
+const                      7.2787      0.005   1517.029      0.000       7.269       7.288
+TOTAL_EMP                  0.0003    5.6e-07    608.333      0.000       0.000       0.000
+TOTPOP                     0.0001   2.47e-06     56.832      0.000       0.000       0.000
+HH                         0.0006   6.11e-06     91.225      0.000       0.001       0.001
+area_km2                  -0.0369      0.000    -88.694      0.000      -0.038      -0.036
+building_coverage_pct      0.0276      0.000    191.638      0.000       0.027       0.028
+avg_seg_length_m       -4.441e-06   1.21e-07    -36.743      0.000   -4.68e-06    -4.2e-06
+street_density_km_km2  -6.052e-07   7.76e-09    -78.029      0.000    -6.2e-07    -5.9e-07
+building_density_n_km2    -0.0008   6.69e-06   -123.451      0.000      -0.001      -0.001
+==========================================================================================

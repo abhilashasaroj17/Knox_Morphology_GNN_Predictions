@@ -1,0 +1,6 @@
+Here's what's included:
+
+External_Centroids - The model subarea approach automatically clips any roadways that enter the cordon line and create an external station node at its nearest endpoint outside of the subarea. Its ID # will correspond with the ones in the rows and columns of the demand matrix.
+Internal_Centroids - These are the centroids of the normal model TAZs for Knox County, of which there are over 500.
+Knox_TAZ - this is a polygon layer of the TAZ boundaries for Knox County
+Links - these are the roadway links in the model area and probably aren't needed for your analysis, but they show how the external centroids are connected.s
