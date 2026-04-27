@@ -94,7 +94,7 @@ Visualizes GNN performance on the 8,121 TPO-labeled test set:
 15. **Land Use Mix** — Diversity of building types (residential, commercial, industrial)
 
 **Training Labels (Binary Classification):**
-- **Source:** Knox TPO 2019 Travel Demand Model
+- **Source:** Knox TPO 2026 Travel Demand Model
   - Assignment results with traffic volumes and capacities
   - Available for 8,121 of 65,524 total segments (12.4% coverage)
   - Covers major roads: motorways, trunks, primary, secondary routes
@@ -178,7 +178,7 @@ Output HTML maps will be in `outputs/maps/`.
   - Attributes: road class, lanes, speed limit, geometry
   - Knox County, TN coverage (36.1° N, -84.0° W)
   
-- **Traffic Volumes:** Knox TPO 2019 Assignment Model
+- **Traffic Volumes:** Knox TPO 2026 Assignment Model
   - Vehicle volumes on 8,121 major road segments
   - V/C ratios from capacity analysis
   - Used as ground truth labels for GNN training
