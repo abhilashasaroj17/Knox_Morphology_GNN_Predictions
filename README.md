@@ -71,11 +71,11 @@ Visualizes GNN performance on the 8,121 TPO-labeled test set:
 
 **Graph Attention Network (GAT)**
 - 2 layers, 8 attention heads per layer
-- Node features: 15 total features per road segment
+- Input: 15 node features per road segment
 - Edge features: spatial distance, connectivity
-- Binary classification: critical (V/C > 0.75) vs non-critical
+- Output: Binary classification probability (critical vs non-critical)
 
-**Node Features (15 total):**
+**Input Features (15 per road segment):**
 1. **Road Class** (categorical → one-hot encoded)
    - `motorway`, `trunk`, `primary`, `secondary`, `tertiary`, `residential`, `service`
 2. **Length (m)** — Road segment length in meters
@@ -93,16 +93,41 @@ Visualizes GNN performance on the 8,121 TPO-labeled test set:
 14. **Mean Building Size** — Average building footprint area (m²)
 15. **Land Use Mix** — Diversity of building types (residential, commercial, industrial)
 
+**Training Labels (Binary Classification):**
+- **Source:** Knox TPO 2019 Travel Demand Model
+  - Assignment results with traffic volumes and capacities
+  - Available for 8,121 of 65,524 total segments (12.4% coverage)
+  - Covers major roads: motorways, trunks, primary, secondary routes
+  
+- **Label Definition:**
+  - **Critical (1):** Volume-to-Capacity (V/C) ratio > 0.75
+    - Count: **1,625 segments** (20.0% of labeled set)
+    - Indicates congested roads approaching/exceeding capacity
+    - High priority for infrastructure planning
+  - **Non-critical (0):** V/C ratio ≤ 0.75
+    - Count: **6,496 segments** (80.0% of labeled set)
+    - Roads operating below capacity threshold
+    
+- **Unlabeled Segments:**
+  - **57,403 segments** (87.6% of network) have no TPO volume data
+  - Includes: residential streets, service roads, minor collectors
+  - GNN extends predictions to these unlabeled roads using:
+    - Graph topology (connectivity patterns)
+    - Road attributes (class, lanes, speed)
+    - Urban morphology (building density, land use)
+    - Spatial relationships to labeled roads
+
 **Graph Structure:**
 - Nodes: 65,524 road segments (Overture Maps)
 - Edges: Spatial connectivity where road segments touch
 - Spatial weighting: Edge weights based on Euclidean distance
 
 **Training Details:**
-- 5-fold stratified cross-validation
+- 5-fold stratified cross-validation on 8,121 labeled segments
 - Class weights to handle imbalance (1:4 critical:non-critical ratio)
 - Adam optimizer, BCEWithLogitsLoss
 - Early stopping with patience=20
+- After training, model predicts criticality for all 65,524 segments
 
 ---
 
