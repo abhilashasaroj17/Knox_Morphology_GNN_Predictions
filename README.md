@@ -4,9 +4,9 @@ Graph Neural Network (GNN) model for predicting critical road segments in Knox C
 
 ## 🗺️ Interactive Maps
 
-**[View Live Map: GNN Completion →](https://YOUR_USERNAME.github.io/KnoxCity2Graph/)**
+**[View Live Map: GNN Completion →](https://abhilashasaroj17.github.io/Knox_Morphology_GNN_Predictions/)**
 
-**[Model Accuracy Analysis →](https://YOUR_USERNAME.github.io/KnoxCity2Graph/model_accuracy.html)**
+**[Model Accuracy Analysis →](https://abhilashasaroj17.github.io/Knox_Morphology_GNN_Predictions/model_accuracy.html)**
 
 ## Overview
 
@@ -134,9 +134,9 @@ If you use this work, please cite:
 ```bibtex
 @misc{knoxcity2graph2026,
   title={Knox County City2Graph: GNN-based Road Criticality Prediction},
-  author={Your Name},
+  author={Abhilasha Saroj},
   year={2026},
-  url={https://github.com/YOUR_USERNAME/KnoxCity2Graph}
+  url={https://github.com/abhilashasaroj17/Knox_Morphology_GNN_Predictions}
 }
 ```
 
