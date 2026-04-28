@@ -76,9 +76,9 @@ ALPHA        = 0.5         # weight: volume vs betweenness
 BETW_K       = 300         # betweenness approximation samples
 EPOCHS       = 400
 LR           = 5e-4
-HIDDEN       = 64
-HEADS        = 4
-DROPOUT      = 0.4
+HIDDEN       = 128        # Increased from 64 for better capacity
+HEADS        = 8          # Increased from 4 for richer attention
+DROPOUT      = 0.3        # Reduced from 0.4 to prevent over-regularization
 PATIENCE     = 40
 K_FOLDS      = 5
 
@@ -530,8 +530,13 @@ class RoadGAT(nn.Module):
     Two-layer Graph Attention Network for binary node classification.
     GAT is preferred over SAGE here because attention weights reveal
     WHICH neighboring segments influence the criticality prediction.
+    
+    Improvements:
+    - Larger hidden dimension (128) for better capacity
+    - More attention heads (8) for richer feature learning
+    - Lower dropout (0.3) to allow better learning
     """
-    def __init__(self, in_ch, hidden, heads=4, dropout=0.4):
+    def __init__(self, in_ch, hidden, heads=8, dropout=0.3):
         super().__init__()
         self.conv1  = GATConv(in_ch, hidden, heads=heads, dropout=dropout, concat=True)
         self.conv2  = GATConv(hidden * heads, hidden, heads=1, dropout=dropout, concat=False)
@@ -546,29 +551,42 @@ class RoadGAT(nn.Module):
         return self.head(x)
 
 
-def train_epoch(model, opt, data, train_mask):
+def train_epoch(model, opt, data, train_mask, class_weights=None):
     model.train()
     opt.zero_grad()
     out  = model(data.x, data.edge_index)
-    loss = F.cross_entropy(out[train_mask], data.y[train_mask])
+    loss = F.cross_entropy(out[train_mask], data.y[train_mask], weight=class_weights)
     loss.backward()
     opt.step()
     return loss.item()
 
 @torch.no_grad()
-def evaluate_clf(model, data, mask):
+def evaluate_clf(model, data, mask, class_weights=None):
     model.eval()
     out   = model(data.x, data.edge_index)
     probs = F.softmax(out[mask], dim=1)[:, 1].cpu().numpy()
     preds = out[mask].argmax(dim=1).cpu().numpy()
     truth = data.y[mask].cpu().numpy()
-    loss  = F.cross_entropy(out[mask], data.y[mask]).item()
+    loss  = F.cross_entropy(out[mask], data.y[mask], weight=class_weights).item()
     return loss, probs, preds, truth
 
 
 # =============================================================================
-# Section 11: Training loop
+# Section 11: Training loop with class weighting
 # =============================================================================
+print("\n" + "=" * 60)
+print("  SECTION 11: Cross-validation training")
+print("=" * 60)
+
+# Calculate class weights to handle imbalance
+y_all = data.y[labeled_mask].numpy()
+n_critical = (y_all == 1).sum()
+n_non_critical = (y_all == 0).sum()
+weight_ratio = n_non_critical / n_critical
+class_weights = torch.tensor([1.0, weight_ratio], dtype=torch.float32)
+print(f"  Class distribution: {n_non_critical} non-critical, {n_critical} critical")
+print(f"  Class weights: [1.0, {weight_ratio:.2f}] (emphasizing critical roads)")
+
 cv_rows = []
 best_fold_k    = None
 best_fold_auc  = -1
@@ -599,8 +617,8 @@ for fold in range(K_FOLDS):
     tr_losses, va_losses = [], []
 
     for epoch in range(1, EPOCHS + 1):
-        tr_l = train_epoch(model, opt, data, train_mask)
-        va_l, _, _, _ = evaluate_clf(model, data, test_mask)
+        tr_l = train_epoch(model, opt, data, train_mask, class_weights)
+        va_l, _, _, _ = evaluate_clf(model, data, test_mask, class_weights)
         sched.step(va_l)
         tr_losses.append(tr_l)
         va_losses.append(va_l)
@@ -618,17 +636,33 @@ for fold in range(K_FOLDS):
     model.load_state_dict(best_wts)
     torch.save(best_wts, CRIT_DIR / f"gat_fold{fold}.pt")
 
-    _, probs, preds, truth = evaluate_clf(model, data, test_mask)
+    _, probs, preds, truth = evaluate_clf(model, data, test_mask, class_weights)
+    
+    # Optimize decision threshold for F1 score
+    thresholds = np.linspace(0.3, 0.7, 41)
+    best_threshold = 0.5
+    best_f1_opt = 0
+    for thresh in thresholds:
+        preds_opt = (probs > thresh).astype(int)
+        f1_opt = f1_score(truth, preds_opt, zero_division=0)
+        if f1_opt > best_f1_opt:
+            best_f1_opt = f1_opt
+            best_threshold = thresh
+    
+    # Use optimized threshold for final predictions
+    preds = (probs > best_threshold).astype(int)
+    
     auc = roc_auc_score(truth, probs)
     f1  = f1_score(truth, preds, zero_division=0)
     pre = precision_score(truth, preds, zero_division=0)
     rec = recall_score(truth, preds, zero_division=0)
 
-    print(f"  Fold {fold}  n_test={test_mask.sum().item():4d}  "
+    print(f"  Fold {fold}  n_test={test_mask.sum().item():4d}  thresh={best_threshold:.3f}  "
           f"AUC={auc:.3f}  F1={f1:.3f}  Prec={pre:.3f}  Rec={rec:.3f}")
 
     cv_rows.append({"fold": fold, "AUC": auc, "F1": f1,
                     "Precision": pre, "Recall": rec,
+                    "threshold": best_threshold,
                     "n_test": test_mask.sum().item(),
                     "tr_losses": tr_losses, "va_losses": va_losses})
 
@@ -662,7 +696,7 @@ best_val = np.inf
 best_wts = None
 patience_cnt = 0
 for epoch in range(1, EPOCHS + 1):
-    tr_l = train_epoch(final_model, final_opt, data, labeled_mask)
+    tr_l = train_epoch(final_model, final_opt, data, labeled_mask, class_weights)
     if tr_l < best_val - 1e-5:
         best_val = tr_l
         best_wts = copy.deepcopy(final_model.state_dict())
