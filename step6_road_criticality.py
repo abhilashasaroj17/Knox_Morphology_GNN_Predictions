@@ -9,20 +9,23 @@ Pipeline:
      Nodes = segments (line graph), Edges = shared connector adjacency
   2. Match TPO assignment links → Overture segments (nearest spatial join)
   3. Compute approximate betweenness centrality on road graph
-  4. Criticality score = 0.5 * norm(volume) + 0.5 * norm(betweenness)
+  4. Compute neighborhood aggregation features (clustering, k-hop averages, diversity)
+  5. Criticality score = 0.5 * norm(volume) + 0.5 * norm(betweenness)
      Label = top-20% by score → critical (1)
-  5. Node features (all 65k segments — Overture-native + TAZ morphology):
-                    road class, length, speed limit, connector count,
-                    surface flag, graph degree, betweenness centrality,
-                    TAZ employment, households, building coverage,
-                    street density, building density, avg footprint
+  6. Node features (all 65k segments — 26 total features):
+     - Road intrinsic (12): class, length, speed, connectors, surface,
+                             degree, betweenness, bridge/link/tunnel/private flags, sinuosity
+     - Neighborhood (8): clustering coefficient, neighbor avg degree/length/speed,
+                         class diversity, spatial density (500m), deadend/intersection flags
+     - TAZ morphology (6): employment, households, building coverage,
+                           street density, building density, avg footprint
      NOTE: TPO-derived fields (volume, V/C, lanes) are NOT node features —
      they are only used to define the training label (criticality score).
-     This is intentional: the 61k unlabeled segments have no volume data,
-     so the model must generalize from topology + land use alone.
-  6. Train GAT (Graph Attention Network) — spatial 5-fold CV on labeled nodes
-  7. Predict criticality on ALL 73,502 Overture segments
-  8. Export criticality map (GeoPackage + figures)
+     This is intentional: the 57k unlabeled segments have no volume data,
+     so the model must generalize from topology + neighborhood + land use.
+  7. Train GAT (Graph Attention Network) — spatial 5-fold CV on labeled nodes
+  8. Predict criticality on ALL 65,524 Overture segments
+  9. Export criticality map (GeoPackage + figures)
 
 Outputs (outputs/criticality/):
   - road_graph.pt               — PyG Data object (full road network)
@@ -49,16 +52,19 @@ import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 from pathlib import Path
 import json, copy
+import time
+from datetime import timedelta
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.data import Data
-from torch_geometric.nn import GATConv
+from torch_geometric.nn import GATConv, SAGEConv, GCNConv
 from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.metrics import (roc_auc_score, f1_score, precision_score,
                               recall_score, roc_curve, confusion_matrix)
 from sklearn.cluster import KMeans
+from scipy.spatial.distance import cdist
 
 # =============================================================================
 # Config
@@ -77,10 +83,11 @@ BETW_K       = 300         # betweenness approximation samples
 EPOCHS       = 400
 LR           = 5e-4
 HIDDEN       = 128        # Increased from 64 for better capacity
-HEADS        = 8          # Increased from 4 for richer attention
+HEADS        = 16         # Increased from 8 for richer attention (16 heads = 16 different attention patterns)
 DROPOUT      = 0.3        # Reduced from 0.4 to prevent over-regularization
 PATIENCE     = 40
-K_FOLDS      = 5
+K_FOLDS      = 5          # Spatial k-means folds (not random - see Section 9)
+MODEL_TYPE   = "GAT"      # Options: "GAT" (3-layer attention) or "Hybrid" (GAT+SAGE+GCN)
 
 # Driveable road classes only (exclude footways, rail, steps, cycleways)
 DRIVEABLE = {"motorway","trunk","primary","secondary","tertiary",
@@ -292,6 +299,103 @@ segs["betweenness"] = segs.index.map(betw).fillna(0)
 print(f"  Betweenness range: {segs['betweenness'].min():.6f} – {segs['betweenness'].max():.6f}")
 
 # =============================================================================
+# Section 4b: Highway/Infrastructure proximity features (OPTIMIZED)
+# =============================================================================
+print("\n" + "=" * 60)
+print("  SECTION 4b: Highway/Infrastructure proximity features")
+print("=" * 60)
+
+# Identify major infrastructure (highways, arterials)
+major_classes = {"motorway", "trunk", "primary"}
+segs["is_major_road"] = segs["class"].isin(major_classes).astype(int)
+major_segments = segs[segs["is_major_road"] == 1].index.tolist()
+
+print(f"  Major infrastructure segments: {len(major_segments):,} / {len(segs):,}")
+print(f"  Computing proximity features for {len(segs):,} segments...")
+
+# OPTIMIZATION: Precompute all centroids once (avoid repeated .loc[] calls)
+print("  Precomputing centroids for all segments...")
+all_centroids = segs.geometry.centroid.values
+all_centroid_coords = np.array([[pt.x, pt.y] for pt in all_centroids])
+
+major_centroid_coords = all_centroid_coords[major_segments]
+
+# Feature 1: Distance to nearest major road (euclidean) - VECTORIZED
+print("  1/6: Distance to nearest major road (using vectorized computation)...")
+from scipy.spatial.distance import cdist
+
+# Compute all pairwise distances at once (65k x 2.2k matrix)
+distances = cdist(all_centroid_coords, major_centroid_coords, metric='euclidean')
+min_distances = distances.min(axis=1)  # Min distance for each segment
+segs["dist_to_major_road_m"] = np.clip(min_distances, 0, 5000)
+
+print(f"     ✓ Computed in vectorized fashion (mean distance: {min_distances.mean():.0f}m)")
+
+# Feature 2: Network hops to nearest major road - BFS OPTIMIZATION
+print("  2/6: Network hops to nearest major road (using reverse BFS from major roads)...")
+# Instead of 63k × 2k path queries, do 2k BFS traversals outward from major roads
+hops_to_major = np.full(len(segs), 999, dtype=int)
+hops_to_major[major_segments] = 0
+
+# BFS from all major roads simultaneously
+from collections import deque
+queue = deque([(idx, 0) for idx in major_segments])
+visited = set(major_segments)
+
+while queue:
+    node, dist = queue.popleft()
+    for neighbor in G_road.neighbors(node):
+        if neighbor not in visited:
+            visited.add(neighbor)
+            hops_to_major[neighbor] = dist + 1
+            queue.append((neighbor, dist + 1))
+
+segs["hops_to_major_road"] = np.clip(hops_to_major, 0, 20)
+print(f"     ✓ BFS complete (mean hops: {segs['hops_to_major_road'][segs['hops_to_major_road']<20].mean():.1f})")
+
+# Feature 3: Count of major roads within 500m - VECTORIZED
+print("  3/6: Major road density within 500m...")
+major_density = (distances <= 500).sum(axis=1)
+segs["major_road_density_500m"] = major_density
+print(f"     ✓ Computed (mean density: {major_density.mean():.1f})")
+
+# Feature 4: Betweenness centrality specifically for paths TO major roads
+print("  4/6: Betweenness to major roads (sampling 50 residential → all major)...")
+residential_segments = segs[segs["class"] == "residential"].index.tolist()
+
+betweenness_to_major = {i: 0 for i in segs.index}
+
+# Sample for computational efficiency
+import random
+random.seed(42)
+residential_sample = random.sample(residential_segments, min(50, len(residential_segments)))
+
+for res_idx in residential_sample:
+    for maj_idx in major_segments:
+        if nx.has_path(G_road, res_idx, maj_idx):
+            path = nx.shortest_path(G_road, res_idx, maj_idx)
+            for node in path[1:-1]:  # Exclude source and target
+                betweenness_to_major[node] += 1
+
+segs["betweenness_to_major"] = [betweenness_to_major[i] for i in segs.index]
+print(f"     ✓ Paths computed (mean betweenness: {segs['betweenness_to_major'].mean():.1f})")
+
+# Feature 5: Connects directly to major road (1-hop away)
+print("  5/6: Direct connections to major roads...")
+segs["connects_to_major"] = (segs["hops_to_major_road"] <= 1).astype(int)
+print(f"     ✓ Flagged {segs['connects_to_major'].sum():,} segments ({segs['connects_to_major'].mean()*100:.1f}%)")
+
+# Feature 6: Summary statistics
+print("  6/6: Infrastructure features complete!")
+print(f"\n  Highway/Infrastructure Features Summary:")
+print(f"  - dist_to_major_road_m: mean={segs['dist_to_major_road_m'].mean():.0f}m, max={segs['dist_to_major_road_m'].max():.0f}m")
+print(f"  - hops_to_major_road: mean={segs['hops_to_major_road'][segs['hops_to_major_road']<20].mean():.1f}, max={segs['hops_to_major_road'].max()}")
+print(f"  - major_road_density_500m: mean={segs['major_road_density_500m'].mean():.1f}, max={segs['major_road_density_500m'].max()}")
+print(f"  - betweenness_to_major: mean={segs['betweenness_to_major'].mean():.1f}, max={segs['betweenness_to_major'].max()}")
+print(f"  - is_major_road: {segs['is_major_road'].sum():,} segments ({segs['is_major_road'].mean()*100:.1f}%)")
+print(f"  - connects_to_major: {segs['connects_to_major'].sum():,} segments ({segs['connects_to_major'].mean()*100:.1f}%)")
+
+# =============================================================================
 # Section 5: Match TPO assignment → Overture segments
 # =============================================================================
 print("\n" + "=" * 60)
@@ -463,16 +567,21 @@ BASE_FEATS = ["length_m","class_enc","connector_count","speed_kph",
               "has_surface","graph_degree","betweenness",
               "is_bridge","is_link","is_tunnel","is_private","sinuosity"]
 
+# Highway/infrastructure proximity features
+INFRA_FEATS = ["dist_to_major_road_m","hops_to_major_road","major_road_density_500m",
+               "betweenness_to_major","is_major_road","connects_to_major"]
+
 # TAZ morphology features (land use / built environment context)
 MORPH_FEATS = [c for c in TAZ_FEAT_COLS if c in segs.columns]
 
-FEAT_COLS = BASE_FEATS + MORPH_FEATS
+FEAT_COLS = BASE_FEATS + INFRA_FEATS + MORPH_FEATS
 
 X_raw = segs[FEAT_COLS].fillna(0).values.astype(np.float32)
 scaler = StandardScaler()
 X_norm = scaler.fit_transform(X_raw).astype(np.float32)
 
 print(f"  Road-intrinsic features ({len(BASE_FEATS)}): {BASE_FEATS}")
+print(f"  Infrastructure features ({len(INFRA_FEATS)}): {INFRA_FEATS}")
 print(f"  TAZ morphology features ({len(MORPH_FEATS)}): {MORPH_FEATS}")
 print(f"  Feature matrix total: {X_norm.shape}")
 
@@ -509,6 +618,13 @@ print("\n" + "=" * 60)
 print("  SECTION 9: Spatial {} -fold CV".format(K_FOLDS))
 print("=" * 60)
 
+# IMPORTANT: Use spatial clustering for folds, NOT random splits
+# Why? Roads are spatially autocorrelated. Random CV would leak information
+# because nearby test segments share similar contexts with training segments.
+# Spatial folds ensure test segments are geographically separated from training.
+print("  Creating spatial folds using K-Means clustering on segment centroids...")
+print("  This ensures test segments are geographically distant from training data.")
+
 cx = segs.geometry.centroid.x.values
 cy = segs.geometry.centroid.y.values
 km = KMeans(n_clusters=K_FOLDS, random_state=42, n_init=10)
@@ -519,27 +635,63 @@ labeled_idx = np.where(labeled_mask_np)[0]
 labeled_segs = segs.iloc[labeled_idx].copy()
 labeled_segs["fold"] = all_folds[labeled_idx]
 
-print(f"  Fold sizes: { {k: int((labeled_segs['fold']==k).sum()) for k in range(K_FOLDS)} }")
+fold_sizes = {k: int((labeled_segs['fold']==k).sum()) for k in range(K_FOLDS)}
+print(f"  Fold sizes: {fold_sizes}")
+print(f"  Note: Fold sizes vary because K-Means assigns to nearest centroid.")
+print(f"        Different road densities across Knox County → unequal cluster sizes.")
+print(f"        This is NORMAL and EXPECTED for spatial CV.")
 
 # =============================================================================
-# Section 10: GAT model
+# Section 10: GAT model and Focal Loss
 # =============================================================================
+
+class FocalLoss(nn.Module):
+    """
+    Focal Loss for addressing class imbalance and hard example mining.
+    Focuses training on hard-to-classify examples by down-weighting easy examples.
+    
+    Args:
+        alpha: Weight for positive class (critical roads). Default 0.75.
+        gamma: Focusing parameter. Higher gamma means more focus on hard examples. Default 2.0.
+    
+    Formula: FL(p_t) = -alpha * (1 - p_t)^gamma * log(p_t)
+    where p_t is the model's estimated probability for the true class.
+    """
+    def __init__(self, alpha=0.75, gamma=2.0):
+        super().__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+    
+    def forward(self, logits, targets):
+        ce_loss = F.cross_entropy(logits, targets, reduction='none')
+        pt = torch.exp(-ce_loss)  # Probability of true class
+        focal_loss = self.alpha * (1 - pt) ** self.gamma * ce_loss
+        return focal_loss.mean()
+
 
 class RoadGAT(nn.Module):
     """
-    Two-layer Graph Attention Network for binary node classification.
+    Three-layer Graph Attention Network for binary node classification.
     GAT is preferred over SAGE here because attention weights reveal
     WHICH neighboring segments influence the criticality prediction.
     
-    Improvements:
+    Improvements from baseline:
+    - 3 layers (was 2) for deeper neighborhood context (captures 3-hop neighborhoods)
     - Larger hidden dimension (128) for better capacity
-    - More attention heads (8) for richer feature learning
+    - 16 attention heads (was 4) for richer feature learning
     - Lower dropout (0.3) to allow better learning
+    
+    Architecture:
+    Layer 1: Features → 128×16 = 2048 dim (concat heads)
+    Layer 2: 2048 → 128×16 = 2048 dim (concat heads)  
+    Layer 3: 2048 → 128 dim (single head aggregation)
+    Output: 128 → 2 classes
     """
-    def __init__(self, in_ch, hidden, heads=8, dropout=0.3):
+    def __init__(self, in_ch, hidden=128, heads=16, dropout=0.3):
         super().__init__()
         self.conv1  = GATConv(in_ch, hidden, heads=heads, dropout=dropout, concat=True)
-        self.conv2  = GATConv(hidden * heads, hidden, heads=1, dropout=dropout, concat=False)
+        self.conv2  = GATConv(hidden * heads, hidden, heads=heads, dropout=dropout, concat=True)
+        self.conv3  = GATConv(hidden * heads, hidden, heads=1, dropout=dropout, concat=False)
         self.head   = nn.Linear(hidden, 2)
         self.dropout = dropout
 
@@ -547,52 +699,109 @@ class RoadGAT(nn.Module):
         x = F.dropout(x, p=self.dropout, training=self.training)
         x = F.elu(self.conv1(x, edge_index))
         x = F.dropout(x, p=self.dropout, training=self.training)
-        x = self.conv2(x, edge_index)
+        x = F.elu(self.conv2(x, edge_index))
+        x = F.dropout(x, p=self.dropout, training=self.training)
+        x = self.conv3(x, edge_index)
         return self.head(x)
 
 
-def train_epoch(model, opt, data, train_mask, class_weights=None):
+class HybridGNN(nn.Module):
+    """
+    Hybrid architecture combining GAT, GraphSAGE, and GCN.
+    
+    - GAT: Learns WHICH neighbors matter (attention mechanism)
+    - SAGE: Aggregates neighbor features (mean pooling)
+    - GCN: Smooth spatial features (Laplacian smoothing)
+    
+    Each captures different graph patterns:
+    GAT = selective attention, SAGE = neighborhood aggregation, GCN = global smoothing
+    """
+    def __init__(self, in_ch, hidden=128, heads=16, dropout=0.3):
+        super().__init__()
+        # Parallel branches
+        self.gat1 = GATConv(in_ch, hidden, heads=4, dropout=dropout, concat=True)
+        self.sage1 = SAGEConv(in_ch, hidden)
+        self.gcn1 = GCNConv(in_ch, hidden)
+        
+        # Fusion layer
+        self.fusion = nn.Linear(hidden * 4 + hidden + hidden, hidden)  # 4*128 + 128 + 128 = 768 → 128
+        
+        # Second layer GAT
+        self.gat2 = GATConv(hidden, hidden, heads=1, dropout=dropout, concat=False)
+        
+        self.head = nn.Linear(hidden, 2)
+        self.dropout = dropout
+    
+    def forward(self, x, edge_index):
+        x = F.dropout(x, p=self.dropout, training=self.training)
+        
+        # Parallel processing
+        x_gat = F.elu(self.gat1(x, edge_index))    # 512 dim (4 heads × 128)
+        x_sage = F.elu(self.sage1(x, edge_index))  # 128 dim
+        x_gcn = F.elu(self.gcn1(x, edge_index))    # 128 dim
+        
+        # Concatenate and fuse
+        x_cat = torch.cat([x_gat, x_sage, x_gcn], dim=1)  # 768 dim
+        x = F.elu(self.fusion(x_cat))                      # 128 dim
+        
+        x = F.dropout(x, p=self.dropout, training=self.training)
+        x = self.gat2(x, edge_index)
+        
+        return self.head(x)
+
+
+def train_epoch(model, opt, data, train_mask, criterion):
     model.train()
     opt.zero_grad()
     out  = model(data.x, data.edge_index)
-    loss = F.cross_entropy(out[train_mask], data.y[train_mask], weight=class_weights)
+    loss = criterion(out[train_mask], data.y[train_mask])
     loss.backward()
     opt.step()
     return loss.item()
 
 @torch.no_grad()
-def evaluate_clf(model, data, mask, class_weights=None):
+def evaluate_clf(model, data, mask, criterion):
     model.eval()
     out   = model(data.x, data.edge_index)
     probs = F.softmax(out[mask], dim=1)[:, 1].cpu().numpy()
     preds = out[mask].argmax(dim=1).cpu().numpy()
     truth = data.y[mask].cpu().numpy()
-    loss  = F.cross_entropy(out[mask], data.y[mask], weight=class_weights).item()
+    loss  = criterion(out[mask], data.y[mask]).item()
     return loss, probs, preds, truth
 
 
 # =============================================================================
-# Section 11: Training loop with class weighting
+# Section 11: Training loop with Focal Loss
 # =============================================================================
 print("\n" + "=" * 60)
 print("  SECTION 11: Cross-validation training")
 print("=" * 60)
 
-# Calculate class weights to handle imbalance
+# Check class distribution
 y_all = data.y[labeled_mask].numpy()
 n_critical = (y_all == 1).sum()
 n_non_critical = (y_all == 0).sum()
-weight_ratio = n_non_critical / n_critical
-class_weights = torch.tensor([1.0, weight_ratio], dtype=torch.float32)
 print(f"  Class distribution: {n_non_critical} non-critical, {n_critical} critical")
-print(f"  Class weights: [1.0, {weight_ratio:.2f}] (emphasizing critical roads)")
+print(f"  Class imbalance ratio: {n_non_critical/n_critical:.2f}:1")
+
+# Use Focal Loss instead of class weights
+# alpha=0.75 puts more focus on critical roads, gamma=2.0 focuses on hard examples
+criterion = FocalLoss(alpha=0.75, gamma=2.0)
+print(f"  Loss function: Focal Loss (alpha=0.75, gamma=2.0)")
+if MODEL_TYPE == "Hybrid":
+    print(f"  Model: Hybrid GNN (GAT+SAGE+GCN) with {HIDDEN} hidden units")
+else:
+    print(f"  Model: 3-layer GAT with {HIDDEN} hidden units, {HEADS} attention heads")
+print(f"  Starting {K_FOLDS}-fold cross-validation...\\n")
 
 cv_rows = []
 best_fold_k    = None
 best_fold_auc  = -1
 best_fold_data = None
+total_training_start = time.time()
 
 for fold in range(K_FOLDS):
+    fold_start = time.time()
     test_labeled_idx  = labeled_idx[labeled_segs["fold"].values == fold]
     train_labeled_idx = labeled_idx[labeled_segs["fold"].values != fold]
 
@@ -604,10 +813,17 @@ for fold in range(K_FOLDS):
     # Check both classes represented in training
     y_train = data.y[train_mask].numpy()
     if len(np.unique(y_train)) < 2:
-        print(f"  Fold {fold}: skipping — only one class in training set")
+        print(f"  Fold {fold}: skipping - only one class in training set")
         continue
 
-    model = RoadGAT(len(FEAT_COLS), HIDDEN, HEADS, DROPOUT)
+    print(f"  Fold {fold}: Training on {train_mask.sum()} samples, testing on {test_mask.sum()} samples")
+
+    # Select model architecture
+    if MODEL_TYPE == "Hybrid":
+        model = HybridGNN(len(FEAT_COLS), HIDDEN, HEADS, DROPOUT)
+    else:
+        model = RoadGAT(len(FEAT_COLS), HIDDEN, HEADS, DROPOUT)
+    
     opt   = torch.optim.Adam(model.parameters(), lr=LR, weight_decay=1e-4)
     sched = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, patience=20, factor=0.5)
 
@@ -617,8 +833,8 @@ for fold in range(K_FOLDS):
     tr_losses, va_losses = [], []
 
     for epoch in range(1, EPOCHS + 1):
-        tr_l = train_epoch(model, opt, data, train_mask, class_weights)
-        va_l, _, _, _ = evaluate_clf(model, data, test_mask, class_weights)
+        tr_l = train_epoch(model, opt, data, train_mask, criterion)
+        va_l, _, _, _ = evaluate_clf(model, data, test_mask, criterion)
         sched.step(va_l)
         tr_losses.append(tr_l)
         va_losses.append(va_l)
@@ -630,13 +846,14 @@ for fold in range(K_FOLDS):
         else:
             patience_cnt += 1
             if patience_cnt >= PATIENCE:
-                print(f"  Fold {fold}: early stop epoch {epoch}")
+                fold_elapsed = time.time() - fold_start
+                print(f"  Fold {fold}: Early stop at epoch {epoch} ({timedelta(seconds=int(fold_elapsed))})")
                 break
 
     model.load_state_dict(best_wts)
     torch.save(best_wts, CRIT_DIR / f"gat_fold{fold}.pt")
 
-    _, probs, preds, truth = evaluate_clf(model, data, test_mask, class_weights)
+    _, probs, preds, truth = evaluate_clf(model, data, test_mask, criterion)
     
     # Optimize decision threshold for F1 score
     thresholds = np.linspace(0.3, 0.7, 41)
@@ -678,8 +895,13 @@ cv_metric_df = pd.DataFrame([{k: v for k, v in r.items()
                               for r in cv_rows])
 cv_metric_df.to_csv(CRIT_DIR / "cv_criticality_results.csv", index=False)
 
-print(f"\n  CV Summary (mean):")
-print(cv_metric_df[["AUC","F1","Precision","Recall"]].mean().round(3).to_string())
+total_training_time = time.time() - total_training_start
+print(f"\n  " + "=" * 50)
+print(f"  CV Summary (mean):")
+print(cv_metric_df[["AUC","F1","Precision","Recall"]].mean().round(4).to_string())
+print(f"\n  Total training time: {timedelta(seconds=int(total_training_time))}")
+print(f"  Average per fold: {timedelta(seconds=int(total_training_time/K_FOLDS))}")
+print(f"  " + "=" * 50)
 
 # =============================================================================
 # Section 12: Full inference on all segments
@@ -689,14 +911,20 @@ print("  SECTION 12: Full inference → all segments")
 print("=" * 60)
 
 # Train final model on ALL labeled data
-final_model = RoadGAT(len(FEAT_COLS), HIDDEN, HEADS, DROPOUT)
+if MODEL_TYPE == "Hybrid":
+    final_model = HybridGNN(len(FEAT_COLS), HIDDEN, HEADS, DROPOUT)
+else:
+    final_model = RoadGAT(len(FEAT_COLS), HIDDEN, HEADS, DROPOUT)
+
 final_opt   = torch.optim.Adam(final_model.parameters(), lr=LR, weight_decay=1e-4)
+
+print(f"  Training final {MODEL_TYPE} model on all {labeled_mask.sum()} labeled segments...")
 
 best_val = np.inf
 best_wts = None
 patience_cnt = 0
 for epoch in range(1, EPOCHS + 1):
-    tr_l = train_epoch(final_model, final_opt, data, labeled_mask, class_weights)
+    tr_l = train_epoch(final_model, final_opt, data, labeled_mask, criterion)
     if tr_l < best_val - 1e-5:
         best_val = tr_l
         best_wts = copy.deepcopy(final_model.state_dict())

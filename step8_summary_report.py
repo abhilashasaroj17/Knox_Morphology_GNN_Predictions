@@ -166,9 +166,9 @@ ax.set_ylabel("% TPO links matched", fontsize=9)
 ax.set_title("TPO→Overture Match Rate\nvs Distance Threshold", fontsize=10, fontweight="bold")
 ax.legend(fontsize=8); ax.grid(alpha=0.3); ax.set_facecolor(BG)
 
-plt.savefig(FIG_DIR / "figS1_training_data_overview.png", dpi=150, bbox_inches="tight")
+plt.savefig(FIG_DIR / "v3_figS1_training_data_overview.png", dpi=150, bbox_inches="tight")
 plt.close()
-print("  Saved: figS1_training_data_overview.png")
+print("  Saved: v3_figS1_training_data_overview.png")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Fig S2 — CV test results
@@ -232,9 +232,9 @@ ax.set_title(f"Aggregate Confusion Matrix\n(labeled segments only)\n"
 plt.colorbar(im, ax=ax, shrink=0.75)
 
 plt.tight_layout()
-plt.savefig(FIG_DIR / "figS2_cv_test_results.png", dpi=150, bbox_inches="tight")
+plt.savefig(FIG_DIR / "v3_figS2_cv_test_results.png", dpi=150, bbox_inches="tight")
 plt.close()
-print("  Saved: figS2_cv_test_results.png")
+print("  Saved: v3_figS2_cv_test_results.png")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Fig S3 — Prediction coverage
@@ -290,9 +290,9 @@ ax.set_title("Probability Distribution\nLabeled vs Unlabeled segments", fontsize
 ax.legend(fontsize=8); ax.grid(alpha=0.3); ax.set_facecolor(BG)
 
 plt.tight_layout()
-plt.savefig(FIG_DIR / "figS3_prediction_coverage.png", dpi=150, bbox_inches="tight")
+plt.savefig(FIG_DIR / "v3_figS3_prediction_coverage.png", dpi=150, bbox_inches="tight")
 plt.close()
-print("  Saved: figS3_prediction_coverage.png")
+print("  Saved: v3_figS3_prediction_coverage.png")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Fig S4 — Critical segments by road class
@@ -348,9 +348,9 @@ ax.set_title("Criticality Rate by Road Class\n"
 ax.legend(fontsize=9); ax.grid(alpha=0.3); ax.set_facecolor(BG)
 
 plt.tight_layout()
-plt.savefig(FIG_DIR / "figS4_critical_by_class.png", dpi=150, bbox_inches="tight")
+plt.savefig(FIG_DIR / "v3_figS4_critical_by_class.png", dpi=150, bbox_inches="tight")
 plt.close()
-print("  Saved: figS4_critical_by_class.png")
+print("  Saved: v3_figS4_critical_by_class.png")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Fig S5 — Feature set summary
@@ -429,9 +429,9 @@ ax.set_title("All 18 input features — full coverage over 65,524 segments\n"
              fontsize=10, fontweight="bold", pad=12)
 
 plt.tight_layout()
-plt.savefig(FIG_DIR / "figS5_feature_summary.png", dpi=150, bbox_inches="tight")
+plt.savefig(FIG_DIR / "v3_figS5_feature_summary.png", dpi=150, bbox_inches="tight")
 plt.close()
-print("  Saved: figS5_feature_summary.png")
+print("  Saved: v3_figS5_feature_summary.png")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Print full stats to terminal
@@ -458,23 +458,28 @@ print(f"""
     Critical (label=1):     {n_gt_critical:,}  (20.0%)
     Non-critical (label=0): {n_gt_noncrit:,}  (80.0%)
 
-── NODE FEATURES (18 total) ────────────────────────────────────
+── NODE FEATURES (24 total) ────────────────────────────────────
   Road geometry (2):      length_m, sinuosity
   Road class (3):         class_enc, speed_kph, has_surface
   Network topology (3):   connector_count, graph_degree, betweenness
   Structural flags (4):   is_bridge, is_link, is_tunnel, is_private
+  Highway/Infrastructure (6): dist_to_major_road_m, hops_to_major_road,
+                          major_road_density_500m, betweenness_to_major,
+                          is_major_road, connects_to_major
   TAZ land use (6):       TOTAL_EMP, HH, building_coverage_pct,
                           street_density_km_km2, building_density_n_km2,
                           avg_footprint_m2
   (Volume, V/C, lanes → label only, NOT model input)
 
 ── MODEL ARCHITECTURE ──────────────────────────────────────────
-  Type:      Graph Attention Network (GAT), 2-layer
-  Layer 1:   GATConv(18 → 64, heads=4) → 256-dim + ELU
-  Layer 2:   GATConv(256 → 64, heads=1)
-  Head:      Linear(64 → 2)  [binary classification]
+  Type:      Graph Attention Network (GAT), 3-layer
+  Layer 1:   GATConv(24 → 128, heads=16) → 2048-dim + ELU + Dropout(0.3)
+  Layer 2:   GATConv(2048 → 128, heads=16) → 2048-dim + ELU + Dropout(0.3)
+  Layer 3:   GATConv(2048 → 128, heads=1) → 128-dim
+  Head:      Linear(128 → 2)  [binary classification]
+  Loss:      Focal Loss (α=0.75, γ=2.0) - down-weights easy examples
   Graph:     65,524 nodes  |  159,472 edges (shared-endpoint adjacency)
-  Training:  Adam lr=5e-4, dropout=0.4, early stop patience=40
+  Training:  Adam lr=1e-3, dropout=0.3, early stop patience=60
 
 ── 5-FOLD SPATIAL CV TEST RESULTS ──────────────────────────────
 {cv_df[["fold","n_test","AUC","F1","Precision","Recall"]].to_string(index=False)}
@@ -485,7 +490,7 @@ print(f"""
 ── HOW PREDICTIONS WERE MADE ───────────────────────────────────
   1. Final model retrained on ALL 4,105 labeled segments
   2. Single forward pass over entire 65,524-node graph
-  3. Each node receives embedding from 2 GAT layers,
+  3. Each node receives embedding from 3 GAT layers,
      attending to its road-network neighbors
   4. Softmax head outputs P(critical) for every node
   5. Threshold 0.5 → binary pred_critical label

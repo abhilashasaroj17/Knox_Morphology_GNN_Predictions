@@ -10,8 +10,8 @@ GROUP A — TPO-Labeled Segments (Overture segs matched to TPO volumes)
 
 GROUP B — Unlabeled Segments (no TPO match — pure GNN extension)
   GNN predicted on these 57k roads with no ground truth.
-  B1 · GNN Critical, no TPO label            (orange)     — prob ≥ 0.50
-  B2 · GNN Non-critical — High   0.30–0.50  (yellow-grey) — borderline
+  B1 · GNN Critical, no TPO label            (orange)     — prob ≥ 0.41 (CV threshold)
+  B2 · GNN Non-critical — High   0.30–0.41  (yellow-grey) — borderline
   B3 · GNN Non-critical — Medium 0.10–0.30  (light grey)
   B4 · GNN Non-critical — Low      < 0.10   (near-invisible, off by default)
 
@@ -34,8 +34,12 @@ OUT_HTML.mkdir(parents=True, exist_ok=True)
 print("Loading Overture criticality segments...")
 segs = gpd.read_file(CRIT_DIR / "critical_segments.gpkg").to_crs("EPSG:4326")
 segs["pred_prob_critical"] = segs["pred_prob_critical"].fillna(0).astype(float)
-segs["pred_critical"]      = segs["pred_critical"].fillna(0).astype(int)
+
+# Use CV average optimal threshold (0.41) instead of default 0.5 for consistency with CV results
+CV_THRESHOLD = 0.41
+segs["pred_critical"] = (segs["pred_prob_critical"] >= CV_THRESHOLD).astype(int)
 print(f"  Total Overture segments: {len(segs):,}")
+print(f"  Using CV-optimized threshold: {CV_THRESHOLD} (average of 0.36-0.47 per fold)")
 
 # ─── Segment masks ────────────────────────────────────────────────────────────
 has_tpo  = segs["critical"].notna()
@@ -45,9 +49,9 @@ gnn_only = ~has_tpo                              # no TPO label at all
 
 p = segs["pred_prob_critical"]
 
-# GNN-only segments split by predicted probability
-gnn_crit  = gnn_only & (p >= 0.50)
-gnn_nc_hi = gnn_only & (p >= 0.30) & (p < 0.50)
+# GNN-only segments split by predicted probability (using CV threshold)
+gnn_crit  = gnn_only & (p >= CV_THRESHOLD)  # Critical using CV threshold
+gnn_nc_hi = gnn_only & (p >= 0.30) & (p < CV_THRESHOLD)  # Borderline
 gnn_nc_md = gnn_only & (p >= 0.10) & (p < 0.30)
 gnn_nc_lo = gnn_only & (p < 0.10)
 
@@ -59,8 +63,8 @@ print(f"GROUP A — TPO-labeled Overture segs ({int(has_tpo.sum()):,} total)")
 print(f"  A1 · TPO Critical (GT=1):               {int(tpo_c.sum()):>6,}")
 print(f"  A2 · TPO Non-critical (GT=0):            {int(tpo_nc.sum()):>6,}")
 print(f"\nGROUP B — No TPO label ({int(gnn_only.sum()):,} total — GNN extension)")
-print(f"  B1 · GNN Critical       (prob ≥ 0.50):  {int(gnn_crit.sum()):>6,}")
-print(f"  B2 · GNN Non-crit High  (0.30–0.50):    {int(gnn_nc_hi.sum()):>6,}  ← borderline")
+print(f"  B1 · GNN Critical       (prob ≥ {CV_THRESHOLD}):  {int(gnn_crit.sum()):>6,}")
+print(f"  B2 · GNN Non-crit High  (0.30–{CV_THRESHOLD}):    {int(gnn_nc_hi.sum()):>6,}  ← borderline")
 print(f"  B3 · GNN Non-crit Med   (0.10–0.30):    {int(gnn_nc_md.sum()):>6,}")
 print(f"  B4 · GNN Non-crit Low   (< 0.10):       {int(gnn_nc_lo.sum()):>6,}")
 print(f"{'='*60}")
@@ -128,8 +132,8 @@ add_layer(tpo_c,     "A1 · TPO Critical (GT=1)",        "#C0392B", weight=4.0, 
 print("\nAdding Group B (GNN extension — no TPO label)...")
 add_layer(gnn_nc_lo, "B4 · GNN Non-critical Low  (<0.10)",       "#DEDEDE", weight=0.8, opacity=0.25, show=False)
 add_layer(gnn_nc_md, "B3 · GNN Non-critical Med  (0.10–0.30)",   "#BBBBBB", weight=1.2, opacity=0.45, show=True)
-add_layer(gnn_nc_hi, "B2 · GNN Non-critical High (0.30–0.50)",   "#E59866", weight=1.8, opacity=0.60, show=True)
-add_layer(gnn_crit,  "B1 · GNN Critical, no TPO (prob ≥ 0.50)",  "#8E44AD", weight=3.0, opacity=0.90, show=True)
+add_layer(gnn_nc_hi, f"B2 · GNN Non-critical High (0.30–{CV_THRESHOLD})",   "#E59866", weight=1.8, opacity=0.60, show=True)
+add_layer(gnn_crit,  f"B1 · GNN Critical, no TPO (prob ≥ {CV_THRESHOLD})",  "#8E44AD", weight=3.0, opacity=0.90, show=True)
 
 # ─── Legend ───────────────────────────────────────────────────────────────────
 legend_html = f"""
@@ -153,9 +157,9 @@ legend_html = f"""
     GROUP B — No TPO Label &nbsp;<span style="font-weight:normal;color:#888;font-size:11px;">({int(gnn_only.sum()):,} segs · GNN prediction only)</span>
   </div>
   <div><span style="background:#8E44AD;display:inline-block;width:28px;height:5px;margin-right:8px;vertical-align:middle;border-radius:2px;"></span>
-    B1 · GNN Critical, no TPO (≥0.50) &nbsp;<b>{int(gnn_crit.sum()):,}</b></div>
+    B1 · GNN Critical, no TPO (≥{CV_THRESHOLD}) &nbsp;<b>{int(gnn_crit.sum()):,}</b></div>
   <div><span style="background:#E59866;display:inline-block;width:28px;height:3px;margin-right:8px;vertical-align:middle;border-radius:2px;"></span>
-    B2 · GNN Non-crit Borderline (0.30–0.50) &nbsp;<b>{int(gnn_nc_hi.sum()):,}</b></div>
+    B2 · GNN Non-crit Borderline (0.30–{CV_THRESHOLD}) &nbsp;<b>{int(gnn_nc_hi.sum()):,}</b></div>
   <div><span style="background:#BBBBBB;display:inline-block;width:28px;height:2px;margin-right:8px;vertical-align:middle;border-radius:2px;"></span>
     B3 · GNN Non-crit Medium (0.10–0.30) &nbsp;<b>{int(gnn_nc_md.sum()):,}</b></div>
   <div><span style="background:#DEDEDE;display:inline-block;width:28px;height:2px;margin-right:8px;vertical-align:middle;border-radius:2px;"></span>

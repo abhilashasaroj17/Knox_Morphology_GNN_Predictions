@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Knox County Road Criticality - Interactive Maps</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 900px;
+            width: 100%;
+        }
+        
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 40px;
+        }
+        
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
+        }
+        
+        .header p {
+            font-size: 1.1em;
+            opacity: 0.95;
+        }
+        
+        .cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 25px;
+            margin-bottom: 30px;
+        }
+        
+        .card {
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+            text-decoration: none;
+            color: inherit;
+            display: block;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 15px 40px rgba(0,0,0,0.3);
+        }
+        
+        .card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 5px;
+            background: linear-gradient(90deg, #667eea, #764ba2);
+        }
+        
+        .new-badge {
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            color: white;
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 0.75em;
+            font-weight: bold;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+        }
+        
+        .card-icon {
+            font-size: 3em;
+            margin-bottom: 15px;
+        }
+        
+        .card h2 {
+            font-size: 1.5em;
+            margin-bottom: 10px;
+            color: #333;
+        }
+        
+        .card p {
+            color: #666;
+            line-height: 1.6;
+            margin-bottom: 15px;
+        }
+        
+        .card-features {
+            list-style: none;
+            padding: 0;
+            margin: 15px 0;
+        }
+        
+        .card-features li {
+            padding: 5px 0;
+            color: #555;
+            font-size: 0.9em;
+        }
+        
+        .card-features li::before {
+            content: '✓ ';
+            color: #4CAF50;
+            font-weight: bold;
+            margin-right: 5px;
+        }
+        
+        .button {
+            display: inline-block;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 12px 30px;
+            border-radius: 25px;
+            text-decoration: none;
+            font-weight: 600;
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+            margin-top: 10px;
+        }
+        
+        .button:hover {
+            transform: scale(1.05);
+            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
+        }
+        
+        .footer {
+            text-align: center;
+            color: white;
+            margin-top: 30px;
+            padding: 20px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 15px;
+            backdrop-filter: blur(10px);
+        }
+        
+        .footer h3 {
+            margin-bottom: 15px;
+            font-size: 1.2em;
+        }
+        
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+        
+        .stat {
+            background: rgba(255,255,255,0.2);
+            padding: 15px;
+            border-radius: 10px;
+            backdrop-filter: blur(10px);
+        }
+        
+        .stat-value {
+            font-size: 2em;
+            font-weight: bold;
+            display: block;
+        }
+        
+        .stat-label {
+            font-size: 0.85em;
+            opacity: 0.9;
+            margin-top: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🗺️ Knox County Road Criticality</h1>
+            <p>GNN-Powered Critical Road Identification System v3.0</p>
+        </div>
+        
+        <div class="cards">
+            <a href="model_accuracy.html" class="card">
+                <div class="card-icon">📊</div>
+                <h2>Model Accuracy Map</h2>
+                <p>Explore the confusion matrix visualization showing model performance on TPO-labeled roads.</p>
+                <ul class="card-features">
+                    <li>True/False Positives & Negatives</li>
+                    <li>Interactive layer controls</li>
+                    <li>74.5% recall, 55.1% precision</li>
+                    <li>8,121 labeled segments</li>
+                </ul>
+                <span class="button">View Map →</span>
+            </a>
+            
+            <a href="model_accuracy_chat.html" class="card">
+                <span class="new-badge">🆕 AI POWERED</span>
+                <div class="card-icon">🤖</div>
+                <h2>AI Chat Assistant</h2>
+                <p>Same accuracy map with an integrated AI chatbot! Ask questions about model performance and road characteristics.</p>
+                <ul class="card-features">
+                    <li>Natural language queries</li>
+                    <li>Instant statistical analysis</li>
+                    <li>Powered by GPT-4o-mini</li>
+                    <li>Bring your own API key</li>
+                </ul>
+                <span class="button">Try AI Chat →</span>
+            </a>
+            
+            <a href="gnn_completion.html" class="card">
+                <div class="card-icon">🛣️</div>
+                <h2>GNN Completion Map</h2>
+                <p>See how the GNN extends criticality predictions to all 65,524 road segments across Knox County.</p>
+                <ul class="card-features">
+                    <li>TPO ground truth vs GNN predictions</li>
+                    <li>57,403 unlabeled segments analyzed</li>
+                    <li>Probability-based coloring</li>
+                    <li>Network-wide coverage</li>
+                </ul>
+                <span class="button">Explore Network →</span>
+            </a>
+        </div>
+        
+        <div class="footer">
+            <h3>📈 Model Performance</h3>
+            <div class="stats">
+                <div class="stat">
+                    <span class="stat-value">84.3%</span>
+                    <span class="stat-label">AUC Score</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-value">72.5%</span>
+                    <span class="stat-label">CV Recall</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-value">0.598</span>
+                    <span class="stat-label">F1 Score</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-value">24</span>
+                    <span class="stat-label">Features</span>
+                </div>
+            </div>
+            <p style="margin-top: 20px; opacity: 0.8; font-size: 0.9em;">
+                3-layer Graph Attention Network (GAT) with highway infrastructure features<br>
+                Threshold: 0.41 (CV-optimized) | Focal Loss (α=0.75, γ=2.0)
+            </p>
+        </div>
+    </div>
+</body>
+</html>
