@@ -12,12 +12,15 @@ Graph Neural Network (GNN) model for predicting critical road segments in Knox C
 
 This project uses a Graph Attention Network (GAT) to identify critical road segments based on:
 - Road network topology from Overture Maps (65,524 segments)
-- TPO traffic volume and V/C ratios (8,121 labeled segments)
+- TPO traffic volumes and network centrality (8,121 labeled segments)
 - Graph-based learning to extend predictions to unlabeled roads
 
 ### Key Results
-- **Test Accuracy:** 82.8% (5-fold CV)
-- **Recall:** 42.8% (696 of 1,625 critical roads detected)
+- **Test AUC:** 84.3% (5-fold CV)
+- **Test Accuracy:** 82.8%
+- **Recall:** 72.5% (1,177 of 1,625 critical roads detected)
+- **Precision:** 52.3%
+- **F1 Score:** 0.598
 - **GNN Extension:** 4,556 additional critical roads identified with no TPO label
 
 ---
@@ -40,26 +43,23 @@ Shows all 65,524 Overture segments in 6 layers:
 
 ### 2. Model Accuracy Map (Confusion Matrix)
 Visualizes GNN performance on the 8,121 TPO-labeled test set:
-- 🟢 **TP (696):** Correctly identified critical
-- 🟡 **FN (929):** Missed critical roads
-- 🟠 **FP (470):** Over-predicted as critical
-- ⚪ **TN (6,026):** Correctly identified non-critical
+- 🟢 **TP (1,211):** Correctly identified critical
+- 🟡 **FN (414):** Missed critical roads
+- 🟠 **FP (985):** Over-predicted as critical
+- ⚪ **TN (5,511):** Correctly identified non-critical
 
 ---
 
 ## Pipeline Steps
 
-1. **`step1_download_overture.py`** — Download road segments and buildings from Overture Maps
-2. **`step2_build_graphs.py`** — Build spatial graph with NetworkX, compute centrality metrics
-3. **`step3_morphology_features.py`** — Extract urban morphology features from building data
-   - Building density, coverage, sizes in 500m buffers
-   - Street network density and connectivity
-   - Land use diversity metrics
-4. **`step4_match_tpo_volumes.py`** — Match TPO traffic volumes to Overture segments via spatial join
-5. **`step5_prepare_training_data.py`** — Convert to PyTorch Geometric format with all node features
-6. **`step6_road_criticality.py`** — Train GAT model with 5-fold stratified CV
-   - Uses 15 node features: road attributes + graph metrics + morphology
-   - Binary classification: V/C > 0.75 threshold
+1. **`step1_base_datasets.py`** — Load and clean Knox TPO data (TAZ zones, OD matrix, assignment)
+2. **`step2_build_graphs.py`** — Download Overture Maps data, build spatial graphs, aggregate morphology to TAZ zones
+3. **`step3_regression.py`** — Baseline regression models (OLS, Poisson) for trip generation
+4. **`step4_hetero_graph.py`** — Build heterogeneous graph for zone-level GNN
+5. **`step5_gnn_train.py`** — Train zone-level GNN for trip production/attraction
+6. **`step6_road_criticality.py`** — Train road-level GAT for criticality prediction (main model)
+   - Uses 24 node features: road attributes + graph metrics + infrastructure proximity + TAZ morphology
+   - Binary classification: criticality score (0.5×volume + 0.5×betweenness), top 20% = critical
 7. **`step7_interactive_maps.py`** — Generate initial prediction maps
 8. **`step8_summary_report.py`** — Generate performance report with figures
 9. **`step9_comparison_map.py`** — TPO ground truth vs GNN extension map (6 layers)
@@ -70,43 +70,59 @@ Visualizes GNN performance on the 8,121 TPO-labeled test set:
 ## Model Architecture
 
 **Graph Attention Network (GAT)**
-- 2 layers, 8 attention heads per layer
-- Input: 15 node features per road segment
-- Edge features: spatial distance, connectivity
+- 3 layers, 16 attention heads per layer
+- Input: 24 node features per road segment
+- Edge features: spatial adjacency (shared endpoints)
 - Output: Binary classification probability (critical vs non-critical)
 
-**Input Features (15 per road segment):**
-1. **Road Class** (categorical → one-hot encoded)
-   - `motorway`, `trunk`, `primary`, `secondary`, `tertiary`, `residential`, `service`
-2. **Length (m)** — Road segment length in meters
-3. **Lanes** — Number of travel lanes
-4. **Max Speed (km/h)** — Posted speed limit
-5. **Width (m)** — Road width (if available)
-6. **Is One-Way** — Binary indicator for one-way streets
-7. **Degree Centrality** — Number of connected road segments
-8. **Betweenness Centrality** — Measure of how often the segment lies on shortest paths
-9. **Closeness Centrality** — Average distance to all other segments
-10. **Building Density** — Buildings per km² in 500m buffer
-11. **Building Footprint Coverage** — % of area covered by buildings
-12. **Street Network Density** — Total km of roads per km² in buffer
-13. **Street Connectivity** — Average node degree in buffer
-14. **Mean Building Size** — Average building footprint area (m²)
-15. **Land Use Mix** — Diversity of building types (residential, commercial, industrial)
+**Input Features (24 per road segment):**
+
+*Road Intrinsic (12 features):*
+1. **Length (m)** — Road segment length in meters
+2. **Road Class** (encoded) — motorway, trunk, primary, secondary, tertiary, residential, service, etc.
+3. **Connector Count** — Number of endpoint connections (degree)
+4. **Speed Limit (km/h)** — Posted speed limit
+5. **Has Surface** — Surface type information available (binary)
+6. **Graph Degree** — Number of adjacent road segments
+7. **Betweenness Centrality** — Measure of how often segment lies on shortest paths
+8. **Is Bridge** — Bridge flag (binary)
+9. **Is Link/Ramp** — Highway link or ramp (binary)
+10. **Is Tunnel** — Tunnel flag (binary)
+11. **Is Private** — Private road access restriction (binary)
+12. **Sinuosity** — Road curvature (actual length / straight-line distance)
+
+*Infrastructure Proximity (6 features):*
+13. **Distance to Major Road (m)** — Euclidean distance to nearest highway/arterial
+14. **Hops to Major Road** — Network distance (# of segments) to nearest major road
+15. **Major Road Density (500m)** — Count of major roads within 500m radius
+16. **Betweenness to Major** — Betweenness on paths connecting to major roads
+17. **Is Major Road** — Is this segment a highway/arterial? (binary)
+18. **Connects to Major** — Directly adjacent to major road (binary)
+
+*TAZ Morphology (6 features from Knox TPO zones):*
+19. **Total Employment** — Jobs in TAZ zone containing this segment
+20. **Households** — Number of households in TAZ zone
+21. **Building Coverage (%)** — Percentage of TAZ covered by buildings
+22. **Street Density (km/km²)** — Road network density in TAZ
+23. **Building Density (n/km²)** — Buildings per square km in TAZ
+24. **Average Footprint (m²)** — Mean building size in TAZ
 
 **Training Labels (Binary Classification):**
 - **Source:** Knox TPO 2026 Travel Demand Model
-  - Assignment results with traffic volumes and capacities
+  - Assignment results with traffic volumes
   - Available for 8,121 of 65,524 total segments (12.4% coverage)
   - Covers major roads: motorways, trunks, primary, secondary routes
   
 - **Label Definition:**
-  - **Critical (1):** Volume-to-Capacity (V/C) ratio > 0.75
+  - **Criticality Score** = 0.5 × normalized(volume) + 0.5 × normalized(betweenness)
+    - Combines traffic demand (TPO volumes) with topological importance (graph centrality)
+  - **Critical (1):** Top 20% by criticality score
     - Count: **1,625 segments** (20.0% of labeled set)
-    - Indicates congested roads approaching/exceeding capacity
-    - High priority for infrastructure planning
-  - **Non-critical (0):** V/C ratio ≤ 0.75
+    - Roads with high traffic volumes AND/OR high network centrality
+    - Critical for traffic flow and network connectivity
+  - **Non-critical (0):** Bottom 80% by criticality score
     - Count: **6,496 segments** (80.0% of labeled set)
-    - Roads operating below capacity threshold
+    - Roads with lower combined importance
     
 - **Unlabeled Segments:**
   - **57,403 segments** (87.6% of network) have no TPO volume data
@@ -123,10 +139,12 @@ Visualizes GNN performance on the 8,121 TPO-labeled test set:
 - Spatial weighting: Edge weights based on Euclidean distance
 
 **Training Details:**
-- 5-fold stratified cross-validation on 8,121 labeled segments
-- Class weights to handle imbalance (1:4 critical:non-critical ratio)
-- Adam optimizer, BCEWithLogitsLoss
-- Early stopping with patience=20
+- 5-fold spatial cross-validation (KMeans clustering) on 8,121 labeled segments
+- 3-layer GAT with 128 hidden units, 16 attention heads
+- Focal Loss (α=0.75, γ=2.0) to handle class imbalance
+- Adam optimizer (lr=5e-4, weight_decay=1e-4)
+- Early stopping with patience=40, trained for up to 400 epochs
+- Threshold optimization per fold to maximize F1 score
 - After training, model predicts criticality for all 65,524 segments
 
 ---
@@ -156,11 +174,11 @@ pip install -r requirements.txt
 
 Run the full pipeline:
 ```bash
-python step1_download_overture.py
+python step1_base_datasets.py
 python step2_build_graphs.py
-python step3_morphology_features.py
-python step4_match_tpo_volumes.py
-python step5_prepare_training_data.py
+python step3_regression.py
+python step4_hetero_graph.py
+python step5_gnn_train.py
 python step6_road_criticality.py
 python step7_interactive_maps.py
 python step8_summary_report.py
@@ -180,18 +198,23 @@ Output HTML maps will be in `outputs/maps/`.
   
 - **Traffic Volumes:** Knox TPO 2026 Assignment Model
   - Vehicle volumes on 8,121 major road segments
-  - V/C ratios from capacity analysis
+  - Combined with betweenness centrality to compute criticality scores
   - Used as ground truth labels for GNN training
   
-- **Building Data:** [Overture Maps](https://overturemaps.org/) (buildings theme)
-  - Building footprints, heights, land use types
-  - Used to compute urban morphology features
-  - Aggregated in 500m buffers around each road segment
+- **TAZ Zones & Demographics:** Knox TPO Traffic Analysis Zones
+  - 508 spatial TAZ polygons covering Knox County
+  - Employment, household counts per zone
+  - Used for land use context features
   
-- **Urban Morphology Features:** Computed from buildings + roads
-  - Building density, coverage, sizes
-  - Street network density and connectivity
-  - Land use diversity metrics
+- **Building Data:** [Overture Maps](https://overturemaps.org/) (buildings theme)
+  - Building footprints aggregated to TAZ zones
+  - Used to compute urban morphology features
+  - Building density, coverage, and average sizes per TAZ
+  
+- **Urban Morphology Features:** Computed at TAZ zone level
+  - Building density, coverage, average footprint sizes
+  - Street network density within each TAZ
+  - Employment and household density
 
 ---
 
